@@ -2,7 +2,7 @@
 	"printers": [
 		{
 			"name": "Bizhub 654e (Store)",
-			"driver_inf_file": "\\\\NAS\\Software & Drivers\\Software\\Printers\\Konica Minolta Universal\\UPDPCL6Win_3913100MU\\Driver\\Win_x64\\KOAWOJ__.inf",
+			"driver_inf_file": "\\\\NAS\\Software & Drivers\\Software\\Printers\\Universal_Driver_Installer\\driver\\x64\\PCL6\\KOBxxK__01.inf",
 			"host_name": "bizhub-654e-store.inside.ceemex.com"
 		}
 	]
