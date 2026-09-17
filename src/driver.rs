@@ -1,5 +1,5 @@
 use futures::StreamExt;
-use regex::Regex;
+use regex::{Regex, regex};
 use serde::{Deserialize, Serialize};
 use std::ffi::CString;
 use std::path::Path;
@@ -100,7 +100,7 @@ impl Driver {
                     driver.version = driver_key.get_u32("Version")?;
                     return Ok(driver);
                 }
-                Err(e) => {
+                Err(_e) => {
                     continue;
                 }
             }
@@ -235,4 +235,18 @@ impl Driver {
         Ok(drivers)
     }
     */
+}
+
+pub async fn install_driver_pnputil(inf_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let output = Command::new("pnputil")
+        .args(["/add-driver", &format!("\"{}\"", inf_path), "/install"])
+        .output()?;
+
+    if regex!("^(Driver package added successfully)")
+        .is_match(String::from_utf8(output.stdout).unwrap().as_str())
+    {
+        Ok(())
+    } else {
+        Err("pnputil did not complete successfully".to_string().into())
+    }
 }

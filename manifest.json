@@ -4,6 +4,11 @@
 			"name": "Bizhub 654e (Store)",
 			"driver_inf_file": "\\\\NAS\\Software & Drivers\\Software\\Printers\\Universal_Driver_Installer\\driver\\x64\\PCL6\\KOBxxK__01.inf",
 			"host_name": "bizhub-654e-store.inside.ceemex.com"
+		},
+		{
+			"name": "Bizhub 754e (Offices)",
+			"driver_inf_file": "\\\\NAS\\Software & Drivers\\Software\\Printers\\Konica Minolta bizhub 754e\\Driver\\Drivers\\PCL\\EN\\Win_x64\\KOAYKJ__.INF",
+			"host_name": "bizhub-754e-office.inside.ceemex.com"
 		}
 	]
 }
