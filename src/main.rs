@@ -3,19 +3,9 @@ pub mod port;
 pub mod printer;
 mod server;
 
-use futures::{StreamExt, stream};
-use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::ffi::{CString, c_void};
-use std::path::Path;
-use std::process::Command;
-use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tide::listener::ToListener;
-use tide::prelude::*;
-use tide::{Request, Response};
-use tokio::sync::Mutex;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
 use windows::Win32::Graphics::Printing::{
     AddPrinterA, ClosePrinter, DRIVER_INFO_3A, EnumPortsA, EnumPrinterDriversA,
@@ -26,7 +16,6 @@ use windows::{
     Win32::{Graphics::*, System::Threading::*},
     core::{PCSTR, PSTR},
 };
-use windows_registry::LOCAL_MACHINE;
 
 use driver::*;
 use port::*;
@@ -35,8 +24,8 @@ use server::*;
 
 #[derive(Deserialize, Serialize, Default)]
 pub struct ClientConfig {
-    dry_run: bool,
-    server_address: String,
+    dry_run: Option<bool>,
+    server_address: Option<String>,
     manifest_path: Option<String>,
     sync_interval: Option<Duration>,
 }
@@ -46,11 +35,23 @@ pub struct Manifest {
     printers: Vec<ManifestPrinter>,
 }
 
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct ManifestPort {
+    pub name: Option<String>,
+    pub host_name: String,
+    pub port_number: Option<u16>,
+    pub lpr_queue_name: Option<String>,
+    pub snmp_enabled: Option<bool>,
+    pub snmp_community: Option<String>,
+    pub snmp_index: Option<u32>,
+    pub port_type: Option<PortType>,
+}
+
 #[derive(Deserialize, Serialize, Debug)]
 pub struct ManifestPrinter {
     name: String,
-    host_name: String,
     driver_inf_file: String,
+    port: ManifestPort,
 }
 
 fn pstr_to_string(pstr: windows::core::PSTR) -> Option<String> {
@@ -66,23 +67,23 @@ fn string_to_pstr(s: &str) -> PSTR {
 }
 
 async fn sync_printers(config: &ClientConfig) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Syncing with main server");
-
-    let manifest = match &config.manifest_path {
-        Some(path) => {
-            std::fs::read_to_string(path).and_then(|s| Ok(serde_json::from_str::<Manifest>(&s)?))?
-        }
-        None => {
-            reqwest::get(format!("{}/manifest", config.server_address))
+    let manifest = match &config.server_address {
+        Some(server_address) => {
+            reqwest::get(format!("{}/manifest", server_address))
                 .await?
                 .json::<Manifest>()
                 .await?
         }
+        None => match &config.manifest_path {
+            Some(path) => std::fs::read_to_string(path)
+                .and_then(|s| Ok(serde_json::from_str::<Manifest>(&s)?))?,
+            None => Manifest {
+                printers: Vec::new(),
+            },
+        },
     };
 
     let printers = Printer::get_all()?;
-
-    println!("{:#?}", printers);
 
     let mut printers_to_add: Vec<Printer> = manifest
         .printers
@@ -91,7 +92,7 @@ async fn sync_printers(config: &ClientConfig) -> Result<(), Box<dyn std::error::
         .map(Printer::from)
         .collect();
 
-    if config.dry_run {
+    if config.dry_run.is_some_and(|b| b) {
         println!("Printing results for dry-run:");
         if printers_to_add.is_empty() {
             println!("\tNo printers would be installed");
@@ -108,12 +109,25 @@ async fn sync_printers(config: &ClientConfig) -> Result<(), Box<dyn std::error::
         for printer in &mut printers_to_add {
             match printer.install().await {
                 Ok(()) => {
-                    println!("Installed printer: {}", printer.name);
+                    println!("Installed printer:");
                 }
                 Err(e) => {
-                    eprintln!("Failed to install printer: {}", e);
+                    println!("Failed to install printer: {}", e);
                 }
             }
+            println!("\tName: {}", printer.name);
+            printer
+                .host_name
+                .as_ref()
+                .inspect(|host_name| println!("\tAddress: {}", host_name));
+            println!("\tDriver: {}", printer.driver_name);
+            printer
+                .port
+                .as_ref()
+                .inspect(|port| println!("\tPort: {}", port.name));
+        }
+        if printers_to_add.is_empty() {
+            println!("All printers up to date!");
         }
     }
 
@@ -184,7 +198,7 @@ async fn main() {
     // Overwrite manifest path from args
     config.manifest_path = Some(manifest_path);
     if dry_run {
-        config.dry_run = true;
+        config.dry_run = Some(true);
     }
 
     if is_server {

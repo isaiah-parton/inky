@@ -1,31 +1,24 @@
 use futures::{StreamExt, stream};
-use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::ffi::{CString, c_void};
 use std::path::Path;
-use std::process::Command;
-use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
 use windows::Win32::Graphics::Printing::{
-    AddPrinterA, ClosePrinter, DRIVER_INFO_3A, EnumPortsA, EnumPrinterDriversA,
-    FindFirstPrinterChangeNotification, PORT_INFO_2A, PRINTER_ATTRIBUTE_LOCAL,
-    PRINTER_ATTRIBUTE_NETWORK, PRINTER_CHANGE_ALL, PRINTER_HANDLE, PRINTER_INFO_2A,
+    AddPrinterA, ClosePrinter, PRINTER_ATTRIBUTE_NETWORK, PRINTER_CHANGE_ALL, PRINTER_HANDLE,
+    PRINTER_INFO_2A,
 };
 use windows::{
     Win32::{Graphics::*, System::Threading::*},
     core::{PCSTR, PSTR},
 };
-use windows_registry::LOCAL_MACHINE;
 
-use crate::ManifestPrinter;
-use crate::port::*;
+use crate::{ManifestPort, ManifestPrinter, driver::*, port::*, pstr_to_string, string_to_pstr};
 
 #[derive(Debug, Default, Deserialize, Clone)]
 pub struct Printer {
     pub name: String,
     pub driver_name: String,
-    pub port_name: Option<String>,
     pub host_name: Option<String>,
+    pub port_config: Option<ManifestPort>,
+    pub port: Option<Port>,
     // If present, then the printer was either installed, or a valid driver
     // was detected when it was loaded
     inf_path: Option<String>,
@@ -35,15 +28,15 @@ impl From<&ManifestPrinter> for Printer {
     fn from(input: &ManifestPrinter) -> Printer {
         let mut result = Self::default();
         result.name = input.name.clone();
-        result.host_name = Some(input.host_name.clone());
+        result.host_name = Some(input.port.host_name.clone());
         result.inf_path = Some(input.driver_inf_file.clone());
         result
     }
 }
 
 impl Printer {
-    pub fn ensure_port(self: &mut Self) -> Result<(), Box<dyn std::error::Error>> {
-        if self.port_name.is_some() {
+    pub async fn ensure_port(self: &mut Self) -> Result<(), Box<dyn std::error::Error>> {
+        if self.port.is_some() {
             return Ok(());
         }
         let ports = Port::get_all()?;
@@ -52,12 +45,12 @@ impl Printer {
                 let existing_port = ports.iter().find(|p| &p.host_name == host_name);
                 match existing_port {
                     Some(port) => {
-                        self.port_name = Some(port.name.to_owned());
+                        self.port = Some(port.to_owned());
                         Ok(())
                     }
                     None => {
-                        let new_port = Port::new(host_name, host_name).create()?;
-                        self.port_name = Some(new_port.name);
+                        let new_port = Port::new(host_name, host_name).create().await?;
+                        self.port = Some(new_port);
                         Ok(())
                     }
                 }
@@ -119,7 +112,7 @@ impl Printer {
     }
 
     pub async fn install(self: &mut Self) -> Result<(), Box<dyn std::error::Error>> {
-        self.ensure_port()?;
+        self.ensure_port().await?;
         self.ensure_driver().await?;
 
         let pi2 = PRINTER_INFO_2A {
@@ -127,9 +120,10 @@ impl Printer {
             pDriverName: string_to_pstr(&self.driver_name),
             pPortName: string_to_pstr(
                 &self
-                    .port_name
+                    .port
                     .as_ref()
-                    .ok_or("Expected a port name".to_string())?,
+                    .ok_or("Printer must have a port".to_string())?
+                    .name,
             ),
             pPrintProcessor: string_to_pstr("winprint"),
             pDatatype: string_to_pstr("RAW"),
@@ -192,9 +186,11 @@ impl Printer {
             .map(|info| -> Result<Printer, Box<dyn std::error::Error>> {
             	let driver_name = pstr_to_string(info.pDriverName).unwrap_or_default();
              	let driver = Driver::from_name(&driver_name)?;
+              	let port_name = pstr_to_string(info.pPortName);
                 Ok(Printer {
                     name: pstr_to_string(info.pPrinterName).unwrap_or_default(),
-                    port_name: pstr_to_string(info.pPortName),
+                    port: port_name.as_ref().and_then(|name| Port::get(&name).ok()),
+                    port_config: None,
                     driver_name: driver_name,
                     inf_path: Some(driver.inf_path.to_string()),
                     host_name: if info.pPortName.is_null() {

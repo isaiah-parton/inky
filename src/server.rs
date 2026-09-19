@@ -1,17 +1,9 @@
-mod printer;
-
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
 use tide::listener::ToListener;
-use tide::prelude::*;
 use tide::{Request, Response};
 use tokio::sync::Mutex;
-use windows::{
-    Win32::{Graphics::*, System::Threading::*},
-    core::{PCSTR, PSTR},
-};
 
 use crate::printer::*;
 
@@ -20,7 +12,6 @@ pub struct ServerConfig {
     manifest_path: String,
 }
 
-#[derive(Clone)]
 pub struct Server {
     config: ServerConfig,
     printers_by_machine: Mutex<HashMap<String, Vec<Printer>>>,
@@ -42,7 +33,6 @@ impl Server {
         let mut app = tide::with_state(Arc::new(self));
 
         app.at("/manifest").serve_file(manifest_path)?;
-        app.at("/my_id").get(handle_get_my_id);
         app.at("/:id/printers").put(handle_update_printers);
         app.listen(address).await?;
 
